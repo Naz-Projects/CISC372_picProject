@@ -3,7 +3,7 @@
 #include <time.h>
 #include <string.h>
 #include "image.h"
-
+#include <pthread.h>  
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -20,6 +20,14 @@ Matrix algorithms[]={
     {{-2,-1,0},{-1,1,1},{0,1,2}},
     {{0,0,0},{0,1,0},{0,0,0}}
 };
+
+typedef struct {
+    Image* srcImage;
+    Image* destImage;
+    Matrix algorithm;
+    int start_row;
+    int end_row;
+} ThreadData;
 
 
 //getPixelValue - Computes the value of a specific pixel on a specific channel using the selected convolution kernel
@@ -56,15 +64,47 @@ uint8_t getPixelValue(Image* srcImage,int x,int y,int bit,Matrix algorithm){
 //            destImage: A pointer to a  pre-allocated (including space for the pixel array) structure to receive the convoluted image.  It should be the same size as srcImage
 //            algorithm: The kernel matrix to use for the convolution
 //Returns: Nothing
-void convolute(Image* srcImage,Image* destImage,Matrix algorithm){
-    int row,pix,bit,span;
-    span=srcImage->bpp*srcImage->bpp;
-    for (row=0;row<srcImage->height;row++){
-        for (pix=0;pix<srcImage->width;pix++){
-            for (bit=0;bit<srcImage->bpp;bit++){
-                destImage->data[Index(pix,row,srcImage->width,bit,srcImage->bpp)]=getPixelValue(srcImage,pix,row,bit,algorithm);
+
+// Thread function that processes a range of rows
+void* thread_convolute(void* arg) {
+    ThreadData* data = (ThreadData*) arg;
+    
+    for (int row = data->start_row; row < data->end_row; row++) {
+        for (int pix = 0; pix < data->srcImage->width; pix++) {
+            for (int bit = 0; bit < data->srcImage->bpp; bit++) {
+                data->destImage->data[Index(pix, row, data->srcImage->width, bit, data->srcImage->bpp)] = 
+                    getPixelValue(data->srcImage, pix, row, bit, data->algorithm);
             }
         }
+    }
+    
+    return NULL;
+}
+void convolute(Image* srcImage, Image* destImage, Matrix algorithm) {
+    int NUM_THREADS = 4;
+    pthread_t threads[NUM_THREADS];
+    ThreadData thread_data[NUM_THREADS];
+    
+    // Create threads
+    for (int i = 0; i < NUM_THREADS; i++) {
+        thread_data[i].srcImage = srcImage;
+        thread_data[i].destImage = destImage;
+        memcpy(thread_data[i].algorithm, algorithm, sizeof(Matrix));
+        thread_data[i].start_row = i * (srcImage->height / NUM_THREADS);
+        
+        // Last thread handles any remaining rows
+        if (i == NUM_THREADS - 1) {
+            thread_data[i].end_row = srcImage->height;
+        } else {
+            thread_data[i].end_row = (i + 1) * (srcImage->height / NUM_THREADS);
+        }
+        
+        pthread_create(&threads[i], NULL, thread_convolute, &thread_data[i]);
+    }
+    
+    // Wait for all threads to finish
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
     }
 }
 
